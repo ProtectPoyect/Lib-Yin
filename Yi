@@ -7726,6 +7726,14 @@ function YinYang:CreateWindow(title_text, startTheme)
                     NameEnglish = text,
                     Holder = Holder,
                     Kind = "Slider",
+                    --// Stats: permite leer/escribir el valor actual desde Export/Place Stats
+                    GetValue = function() return value end,
+                    SetValue = function(v)
+                        local pct = math.clamp((v - min) / math.max(max - min, 0.0001), 0, 1)
+                        UpdateSlider(pct, true, false)
+                    end,
+                    Min = min,
+                    Max = max,
                 })
             end
 
@@ -9525,6 +9533,637 @@ function YinYang:CreateWindow(title_text, startTheme)
     end
 
     --// ════════════════════════════════════════════════════════════════
+    --// 📊 STATS EN INICIO — Place Stats / Export Stats (solo sliders)
+    --// Se agrega al final de la pestaña Inicio, debajo del jugador.
+    --// Las ventanas se crean al abrir y se destruyen al cerrar: así la
+    --// lista de sliders siempre está al día y usa el tema vigente.
+    --// Es un campo de Window (no un local) para no gastar el límite de
+    --// 200 variables locales de CreateWindow.
+    --// ════════════════════════════════════════════════════════════════
+    function Window:CreateStatsSection(tab)
+        local TabPage = tab.Page
+
+        local function setBilingual(obj, es, en)
+            obj:SetAttribute("TextSpanish", es)
+            obj:SetAttribute("TextEnglish", en)
+        end
+
+        --// Lista de sliders registrados con id único (si dos sliders de una
+        --// pestaña repiten el texto, el segundo recibe el sufijo "#2", etc.)
+        local function buildIdMap()
+            local seen, list = {}, {}
+            for _, entry in ipairs(Window._GlobalOptionRegistry) do
+                if entry.Kind == "Slider"
+                    and type(entry.GetValue) == "function"
+                    and type(entry.SetValue) == "function" then
+                    local base = tostring(entry.Id)
+                    seen[base] = (seen[base] or 0) + 1
+                    local id = base
+                    if seen[base] > 1 then id = base .. "#" .. seen[base] end
+                    table.insert(list, {
+                        id = id,
+                        tab = base:match("^(.-)::") or base,
+                        entry = entry,
+                    })
+                end
+            end
+            return list
+        end
+
+        --// Panel modal reutilizable (fondo oscuro + ventana + título + cerrar)
+        local function openPanel(titleES, titleEN, maxW, maxH)
+            local Backdrop = mk("TextButton", {
+                Parent = Window.ScreenGui,
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+                BackgroundTransparency = 0.55,
+                BorderSizePixel = 0,
+                Active = true,
+                AutoButtonColor = false,
+                Text = "",
+                ZIndex = 500,
+            })
+            local Panel = mk("Frame", {
+                Parent = Window.ScreenGui,
+                Size = UDim2.new(0.92, 0, 0.9, 0),
+                Position = UDim2.fromScale(0.5, 0.5),
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundColor3 = Theme.Background,
+                BackgroundTransparency = 0.12,
+                BorderSizePixel = 0,
+                ZIndex = 501,
+            })
+            Panel:SetAttribute("ThemeRole", "Background")
+            corner(Panel, 16)
+            stroke(Panel, Theme.Stroke, 1.5, 0.35)
+            --// Tamaño máximo fijo, pero se encoge si la pantalla es chica
+            mk("UISizeConstraint", {
+                Parent = Panel,
+                MinSize = Vector2.new(260, 200),
+                MaxSize = Vector2.new(maxW, maxH),
+            })
+
+            local Bar = mk("Frame", {
+                Parent = Panel,
+                Size = UDim2.new(1, -32, 0, 3),
+                Position = UDim2.new(0, 16, 0, 0),
+                BackgroundColor3 = Theme.Accent,
+                BackgroundTransparency = 0.05,
+                BorderSizePixel = 0,
+                ZIndex = 502,
+            })
+            Bar:SetAttribute("ThemeRole", "Accent")
+            corner(Bar, 2)
+
+            local Title = mk("TextLabel", {
+                Parent = Panel,
+                Size = UDim2.new(1, -50, 0, 30),
+                Position = UDim2.new(0, 16, 0, 12),
+                BackgroundTransparency = 1,
+                Text = GetText(titleES, titleEN),
+                TextColor3 = Theme.Text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 15,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 502,
+            })
+            Title:SetAttribute("ThemeTextRole", "Text")
+            setBilingual(Title, titleES, titleEN)
+
+            local CloseBtn = mk("TextButton", {
+                Parent = Panel,
+                Size = UDim2.fromOffset(28, 28),
+                Position = UDim2.new(1, -40, 0, 10),
+                BackgroundColor3 = Theme.Secondary,
+                BackgroundTransparency = 0.35,
+                BorderSizePixel = 0,
+                Text = "✕",
+                TextColor3 = Theme.TextDim,
+                Font = Enum.Font.GothamBold,
+                TextSize = 13,
+                AutoButtonColor = false,
+                ZIndex = 503,
+            })
+            CloseBtn:SetAttribute("ThemeRole", "Secondary")
+            CloseBtn:SetAttribute("ThemeTextRole", "TextDim")
+            corner(CloseBtn, 9)
+            stroke(CloseBtn, Theme.Stroke, 1, 0.5)
+
+            local closed = false
+            local function close()
+                if closed then return end
+                closed = true
+                Panel:Destroy()
+                Backdrop:Destroy()
+            end
+            CloseBtn.MouseButton1Click:Connect(close)
+            Backdrop.MouseButton1Click:Connect(close)
+
+            return Panel, close
+        end
+
+        --// Texto de estado (abajo a la izquierda) y botón de acción (abajo a la derecha)
+        local function addFooter(Panel, statusY, btnES, btnEN)
+            local Status = mk("TextLabel", {
+                Parent = Panel,
+                Size = UDim2.new(1, -148, 0, 28),
+                Position = UDim2.new(0, 16, 1, statusY),
+                BackgroundTransparency = 1,
+                Text = "",
+                TextColor3 = Theme.Accent,
+                Font = Enum.Font.Gotham,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextWrapped = true,
+                ZIndex = 502,
+            })
+            Status:SetAttribute("ThemeTextRole", "Accent")
+
+            local Btn = mk("TextButton", {
+                Parent = Panel,
+                Size = UDim2.fromOffset(110, 36),
+                Position = UDim2.new(1, -126, 1, -50),
+                BackgroundColor3 = Theme.Accent,
+                Text = GetText(btnES, btnEN),
+                TextColor3 = Theme.AccentText,
+                Font = Enum.Font.GothamBold,
+                TextSize = 13,
+                AutoButtonColor = false,
+                ZIndex = 503,
+            })
+            Btn:SetAttribute("ThemeRole", "Accent")
+            Btn:SetAttribute("ThemeTextRole", "AccentText")
+            setBilingual(Btn, btnES, btnEN)
+            corner(Btn, 10)
+            return Status, Btn
+        end
+
+        --// ── VENTANA: PLACE STATS (importar) ──────────────────────────
+        local function openPlaceStats()
+            local Panel = openPanel("Place Stats", "Place Stats", 340, 238)
+
+            local Instr = mk("TextLabel", {
+                Parent = Panel,
+                Size = UDim2.new(1, -32, 0, 18),
+                Position = UDim2.new(0, 16, 0, 54),
+                BackgroundTransparency = 1,
+                Text = GetText("Pega el código de stats de otro usuario:", "Paste another user's stats code:"),
+                TextColor3 = Theme.TextDim,
+                Font = Enum.Font.Gotham,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 502,
+            })
+            Instr:SetAttribute("ThemeTextRole", "TextDim")
+            setBilingual(Instr, "Pega el código de stats de otro usuario:", "Paste another user's stats code:")
+
+            local Input = mk("TextBox", {
+                Parent = Panel,
+                Size = UDim2.new(1, -32, 1, -140),
+                Position = UDim2.new(0, 16, 0, 78),
+                BackgroundColor3 = Theme.Secondary,
+                BackgroundTransparency = 0.42,
+                BorderSizePixel = 0,
+                Text = "",
+                PlaceholderText = GetText("Código copiado del Export Stats...", "Code copied from Export Stats..."),
+                TextColor3 = Theme.Text,
+                PlaceholderColor3 = Theme.TextDim,
+                Font = Enum.Font.Gotham,
+                TextSize = 11,
+                TextWrapped = true,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextYAlignment = Enum.TextYAlignment.Top,
+                ClearTextOnFocus = false,
+                ZIndex = 502,
+            })
+            Input:SetAttribute("ThemeRole", "Secondary")
+            Input:SetAttribute("ThemeTextRole", "Text")
+            Input:SetAttribute("PlaceholderSpanish", "Código copiado del Export Stats...")
+            Input:SetAttribute("PlaceholderEnglish", "Code copied from Export Stats...")
+            corner(Input, 10)
+            stroke(Input, Theme.Stroke, 1, 0.5)
+            mk("UIPadding", {
+                Parent = Input,
+                PaddingLeft = UDim.new(0, 8),
+                PaddingRight = UDim.new(0, 8),
+                PaddingTop = UDim.new(0, 6),
+            })
+
+            local Status, StartBtn = addFooter(Panel, -48, "Started", "Started")
+
+            StartBtn.MouseButton1Click:Connect(function()
+                local code = Input.Text
+                if not code or code:match("^%s*$") then
+                    Status.Text = GetText("❌ El campo está vacío", "❌ The field is empty")
+                    return
+                end
+                local ok, data = pcall(function()
+                    return HttpService:JSONDecode(code)
+                end)
+                if not ok or type(data) ~= "table" then
+                    Status.Text = GetText("❌ Código inválido", "❌ Invalid code")
+                    return
+                end
+                if data.version ~= 1 then
+                    Status.Text = GetText("❌ Versión de código no compatible", "❌ Unsupported code version")
+                    return
+                end
+                if type(data.sliders) ~= "table" then
+                    Status.Text = GetText("❌ El código no trae ajustes", "❌ The code has no settings")
+                    return
+                end
+
+                local byId = {}
+                for _, item in ipairs(buildIdMap()) do
+                    byId[item.id] = item.entry
+                end
+
+                local applied, skipped = 0, 0
+                for id, raw in pairs(data.sliders) do
+                    local entry = byId[id]
+                    local v = tonumber(raw)
+                    --// v ~= v descarta NaN; también se descartan infinitos
+                    if entry and v and v == v and v ~= math.huge and v ~= -math.huge then
+                        local lo, hi = tonumber(entry.Min), tonumber(entry.Max)
+                        if lo and hi then v = math.clamp(v, lo, hi) end
+                        if pcall(entry.SetValue, v) then
+                            applied = applied + 1
+                        else
+                            skipped = skipped + 1
+                        end
+                    else
+                        skipped = skipped + 1
+                    end
+                end
+
+                playSound(Sounds.Click, 0.6)
+                if applied == 0 then
+                    Status.Text = GetText("⚠️ No se aplicó ningún ajuste", "⚠️ No settings were applied")
+                elseif skipped > 0 then
+                    Status.Text = GetText(
+                        "✅ " .. applied .. " aplicado(s) · " .. skipped .. " omitido(s)",
+                        "✅ " .. applied .. " applied · " .. skipped .. " skipped"
+                    )
+                else
+                    Status.Text = GetText(
+                        "✅ " .. applied .. " ajuste(s) aplicados",
+                        "✅ " .. applied .. " setting(s) applied"
+                    )
+                end
+            end)
+        end
+
+        --// ── VENTANA: EXPORT STATS (exportar) ─────────────────────────
+        local function openExportStats()
+            local Panel = openPanel("Export Stats", "Export Stats", 356, 438)
+
+            local Sub = mk("TextLabel", {
+                Parent = Panel,
+                Size = UDim2.new(1, -32, 0, 18),
+                Position = UDim2.new(0, 16, 0, 54),
+                BackgroundTransparency = 1,
+                Text = GetText("Selecciona las pestañas a exportar:", "Select the tabs to export:"),
+                TextColor3 = Theme.TextDim,
+                Font = Enum.Font.Gotham,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 502,
+            })
+            Sub:SetAttribute("ThemeTextRole", "TextDim")
+            setBilingual(Sub, "Selecciona las pestañas a exportar:", "Select the tabs to export:")
+
+            local ListScroll = mk("ScrollingFrame", {
+                Parent = Panel,
+                Size = UDim2.new(1, -32, 1, -146),
+                Position = UDim2.new(0, 16, 0, 78),
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0,
+                ScrollBarThickness = 3,
+                AutomaticCanvasSize = Enum.AutomaticSize.Y,
+                CanvasSize = UDim2.new(0, 0, 0, 0),
+                ZIndex = 502,
+            })
+            mk("UIListLayout", {
+                Parent = ListScroll,
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                Padding = UDim.new(0, 6),
+            })
+
+            --// Pestañas únicas con al menos un slider (se recalcula en cada apertura)
+            local tabNames, tabSet = {}, {}
+            for _, item in ipairs(buildIdMap()) do
+                if not tabSet[item.tab] then
+                    tabSet[item.tab] = true
+                    table.insert(tabNames, item.tab)
+                end
+            end
+
+            local Status, ExportBtn = addFooter(Panel, -52, "Export", "Export")
+
+            if #tabNames == 0 then
+                local Empty = mk("TextLabel", {
+                    Parent = ListScroll,
+                    Size = UDim2.new(1, 0, 0, 40),
+                    BackgroundTransparency = 1,
+                    Text = GetText("No hay sliders para exportar todavía.", "There are no sliders to export yet."),
+                    TextColor3 = Theme.TextDim,
+                    Font = Enum.Font.Gotham,
+                    TextSize = 12,
+                    TextWrapped = true,
+                    ZIndex = 503,
+                })
+                Empty:SetAttribute("ThemeTextRole", "TextDim")
+                setBilingual(Empty, "No hay sliders para exportar todavía.", "There are no sliders to export yet.")
+            end
+
+            local checked = {}
+            for _, name in ipairs(tabNames) do
+                checked[name] = true -- todo marcado por defecto
+            end
+
+            for i, tabName in ipairs(tabNames) do
+                local Row = mk("Frame", {
+                    Parent = ListScroll,
+                    Size = UDim2.new(1, 0, 0, 40),
+                    BackgroundColor3 = Theme.Secondary,
+                    BackgroundTransparency = 0.48,
+                    BorderSizePixel = 0,
+                    LayoutOrder = i,
+                    ZIndex = 503,
+                })
+                Row:SetAttribute("ThemeRole", "Secondary")
+                corner(Row, 10)
+
+                local CheckBg = mk("Frame", {
+                    Parent = Row,
+                    Size = UDim2.fromOffset(20, 20),
+                    Position = UDim2.new(0, 12, 0.5, -10),
+                    BackgroundColor3 = Theme.Accent,
+                    BorderSizePixel = 0,
+                    ZIndex = 504,
+                })
+                CheckBg:SetAttribute("ThemeRole", "Accent")
+                corner(CheckBg, 5)
+                local CheckMark = mk("TextLabel", {
+                    Parent = CheckBg,
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundTransparency = 1,
+                    Text = "✓",
+                    TextColor3 = Theme.AccentText,
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 13,
+                    ZIndex = 505,
+                })
+                CheckMark:SetAttribute("ThemeTextRole", "AccentText")
+
+                local RL = mk("TextLabel", {
+                    Parent = Row,
+                    Size = UDim2.new(1, -48, 1, 0),
+                    Position = UDim2.new(0, 42, 0, 0),
+                    BackgroundTransparency = 1,
+                    Text = tabName,
+                    TextColor3 = Theme.Text,
+                    Font = Enum.Font.GothamBold,
+                    TextSize = 13,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                    ZIndex = 504,
+                })
+                RL:SetAttribute("ThemeTextRole", "Text")
+
+                local RowBtn = mk("TextButton", {
+                    Parent = Row,
+                    Size = UDim2.new(1, 0, 1, 0),
+                    BackgroundTransparency = 1,
+                    Text = "",
+                    AutoButtonColor = false,
+                    ZIndex = 506,
+                })
+                RowBtn.MouseButton1Click:Connect(function()
+                    checked[tabName] = not checked[tabName]
+                    CheckMark.Visible = checked[tabName]
+                    local role = checked[tabName] and "Accent" or "Secondary"
+                    CheckBg:SetAttribute("ThemeRole", role)
+                    CheckBg.BackgroundColor3 = Theme[role]
+                end)
+            end
+
+            ExportBtn.MouseButton1Click:Connect(function()
+                local sliders, total = {}, 0
+                for _, item in ipairs(buildIdMap()) do
+                    if checked[item.tab] then
+                        local ok, val = pcall(item.entry.GetValue)
+                        if ok and type(val) == "number" then
+                            sliders[item.id] = val
+                            total = total + 1
+                        end
+                    end
+                end
+
+                if total == 0 then
+                    Status.Text = GetText("⚠️ No hay ajustes seleccionados", "⚠️ No settings selected")
+                    return
+                end
+
+                local ok, encoded = pcall(function()
+                    return HttpService:JSONEncode({ version = 1, sliders = sliders })
+                end)
+                if not ok then
+                    Status.Text = GetText("❌ Error al codificar", "❌ Encoding error")
+                    return
+                end
+
+                --// Solo se anuncia éxito si setclipboard existe y no falló
+                local copied = type(setclipboard) == "function" and pcall(setclipboard, encoded)
+                playSound(Sounds.Click, 0.7)
+                if copied then
+                    Status.Text = GetText(
+                        "✅ " .. total .. " ajuste(s) copiados al portapapeles",
+                        "✅ " .. total .. " setting(s) copied to clipboard"
+                    )
+                else
+                    Status.Text = GetText(
+                        "❌ No se pudo copiar: tu ejecutor no soporta setclipboard",
+                        "❌ Could not copy: your executor does not support setclipboard"
+                    )
+                end
+            end)
+        end
+
+        --// ── SECCIÓN EN LA PÁGINA DE INICIO ───────────────────────────
+        local Section = mk("Frame", {
+            Parent = TabPage,
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            ZIndex = 9,
+        })
+        mk("UIListLayout", {
+            Parent = Section,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Padding = UDim.new(0, 10),
+        })
+        mk("UIPadding", {
+            Parent = Section,
+            PaddingBottom = UDim.new(0, 10),
+        })
+
+        local Divider = mk("Frame", {
+            Parent = Section,
+            Size = UDim2.new(1, 0, 0, 1),
+            BackgroundColor3 = Theme.Stroke,
+            BorderSizePixel = 0,
+            LayoutOrder = 0,
+            ZIndex = 9,
+        })
+        Divider:SetAttribute("ThemeRole", "Stroke")
+
+        local Header = mk("Frame", {
+            Parent = Section,
+            Size = UDim2.new(1, 0, 0, 56),
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            LayoutOrder = 1,
+            ZIndex = 9,
+        })
+        mk("ImageLabel", {
+            Parent = Header,
+            Size = UDim2.fromOffset(34, 34),
+            Position = UDim2.new(0, 4, 0.5, -17),
+            BackgroundTransparency = 1,
+            Image = "rbxassetid://88002112319084",
+            ScaleType = Enum.ScaleType.Fit,
+            ZIndex = 10,
+        })
+        local HTitle = mk("TextLabel", {
+            Parent = Header,
+            Size = UDim2.new(1, -50, 0, 22),
+            Position = UDim2.new(0, 48, 0, 7),
+            BackgroundTransparency = 1,
+            Text = GetText("Estadísticas", "Statistics"),
+            TextColor3 = Theme.Text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 10,
+        })
+        HTitle:SetAttribute("ThemeTextRole", "Text")
+        setBilingual(HTitle, "Estadísticas", "Statistics")
+        local HSub = mk("TextLabel", {
+            Parent = Header,
+            Size = UDim2.new(1, -50, 0, 18),
+            Position = UDim2.new(0, 48, 0, 31),
+            BackgroundTransparency = 1,
+            Text = GetText("Selecciona una opción para continuar", "Select an option to continue"),
+            TextColor3 = Theme.TextDim,
+            Font = Enum.Font.Gotham,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 10,
+        })
+        HSub:SetAttribute("ThemeTextRole", "TextDim")
+        setBilingual(HSub, "Selecciona una opción para continuar", "Select an option to continue")
+
+        local function makeOptionCard(icon, titleES, titleEN, descES, descEN, layoutOrder, onClick)
+            local Card = mk("Frame", {
+                Parent = Section,
+                Size = UDim2.new(1, 0, 0, 74),
+                BackgroundColor3 = Theme.Secondary,
+                BackgroundTransparency = 0.5,
+                BorderSizePixel = 0,
+                LayoutOrder = layoutOrder,
+                ZIndex = 9,
+            })
+            Card:SetAttribute("ThemeRole", "Secondary")
+            corner(Card, 14)
+            stroke(Card, Theme.Stroke, 1, 0.5)
+
+            mk("ImageLabel", {
+                Parent = Card,
+                Size = UDim2.fromOffset(42, 42),
+                Position = UDim2.new(0, 14, 0.5, -21),
+                BackgroundTransparency = 1,
+                Image = icon,
+                ScaleType = Enum.ScaleType.Fit,
+                ZIndex = 10,
+            })
+            local TL = mk("TextLabel", {
+                Parent = Card,
+                Size = UDim2.new(1, -104, 0, 22),
+                Position = UDim2.new(0, 66, 0, 14),
+                BackgroundTransparency = 1,
+                Text = GetText(titleES, titleEN),
+                TextColor3 = Theme.Text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 14,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 10,
+            })
+            TL:SetAttribute("ThemeTextRole", "Text")
+            setBilingual(TL, titleES, titleEN)
+            local DL = mk("TextLabel", {
+                Parent = Card,
+                Size = UDim2.new(1, -104, 0, 18),
+                Position = UDim2.new(0, 66, 0, 38),
+                BackgroundTransparency = 1,
+                Text = GetText(descES, descEN),
+                TextColor3 = Theme.TextDim,
+                Font = Enum.Font.Gotham,
+                TextSize = 11,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 10,
+            })
+            DL:SetAttribute("ThemeTextRole", "TextDim")
+            setBilingual(DL, descES, descEN)
+
+            local Arrow = mk("TextLabel", {
+                Parent = Card,
+                Size = UDim2.fromOffset(36, 36),
+                Position = UDim2.new(1, -48, 0.5, -18),
+                BackgroundColor3 = Theme.Secondary,
+                Text = "→",
+                TextColor3 = Theme.Text,
+                Font = Enum.Font.GothamBold,
+                TextSize = 18,
+                ZIndex = 10,
+            })
+            Arrow:SetAttribute("ThemeRole", "Secondary")
+            Arrow:SetAttribute("ThemeTextRole", "Text")
+            corner(Arrow, 10)
+            stroke(Arrow, Theme.Stroke, 1, 0.4)
+
+            --// Un solo botón transparente cubre toda la tarjeta
+            local Hit = mk("TextButton", {
+                Parent = Card,
+                Size = UDim2.new(1, 0, 1, 0),
+                BackgroundTransparency = 1,
+                Text = "",
+                AutoButtonColor = false,
+                ZIndex = 11,
+            })
+            Hit.MouseButton1Click:Connect(function()
+                playSound(Sounds.Click, 0.5)
+                onClick()
+            end)
+        end
+
+        makeOptionCard(
+            "rbxassetid://98421914514000",
+            "Place Stats", "Place Stats",
+            "Aplica los ajustes de otro usuario.", "Apply another user's settings.",
+            2,
+            openPlaceStats
+        )
+        makeOptionCard(
+            "rbxassetid://116421707362805",
+            "Export Stats", "Export Stats",
+            "Copia tus ajustes al portapapeles.", "Copy your settings to the clipboard.",
+            3,
+            openExportStats
+        )
+    end
+
+    --// ════════════════════════════════════════════════════════════════
     --// CREAR AUTOMÁTICAMENTE LAS 3 PESTAÑAS SAGRADAS MEJORADO)
     --// ════════════════════════════════════════════════════════════════
     
@@ -9533,6 +10172,13 @@ function YinYang:CreateWindow(title_text, startTheme)
     AutoTabInicio:CreateWelcomeCard()
     AutoTabInicio:CreateDivider()
     AutoTabInicio:CreateServerInfoCard()
+    --// Stats (Place/Export) debajo del contenido del jugador. Protegido con
+    --// pcall (sin locales nuevos en CreateWindow) para que un fallo aquí no
+    --// impida cargar el resto de la librería.
+    pcall(function()
+        local okStats, errStats = pcall(Window.CreateStatsSection, Window, AutoTabInicio)
+        if not okStats then warn("[Stats] " .. tostring(errStats)) end
+    end)
 
     -- TAB FAVORITOS (Automático)
     AutoTabFavoritosRef = Window:CreateTab("Favo", "Favs", "rbxassetid://101062763457687")
@@ -19544,6 +20190,131 @@ clearSongRows = function()
         PlayerMeta.Text = "Menú de opciones abierto"
     end)
     end
+
+    --// ════════════════════════════════════════════════════════════════
+    --// PESTAÑA FAN ART — dibujos de los fans de Yin Yang
+    --// Usa la misma técnica del BANNER SLIDESHOW del TopBar:
+    --//   game:HttpGet → writefile → getcustomasset
+    --//
+    --// ── CÓMO AGREGAR OTRO DIBUJO ──────────────────────────────────────
+    --// Añadí una entrada nueva a la tabla FanArt_Items:
+    --//   { name = "NombreUnico.png", url = "URL_RAW_de_la_imagen" }
+    --//   • name → archivo local único y sin espacios (caché en disco)
+    --//   • url  → URL RAW: raw.githubusercontent.com/usuario/repo/main/img.png
+    --//            (NO la de github.com/.../blob/...)
+    --// ════════════════════════════════════════════════════════════════
+    function Window:CreateFanArtTab()
+        local TabFanArt = Window:CreateTab("Fan Art", "Fan Art", "rbxassetid://126747088420494")
+        local FanArtPage = TabFanArt.Page
+
+        local FanArt_Items = {
+            { name = "YYFanArt1.png", url = "https://raw.githubusercontent.com/yinyangGPX/Beta/main/file_000000001704820a8cdf28c046004a14.png" },
+        }
+
+        local fanArtExecutorOk = type(game.HttpGet) == "function"
+            and type(writefile) == "function"
+            and type(isfile) == "function"
+            and type(getcustomasset) == "function"
+
+        --// Valida firma PNG o JPEG para no cachear una respuesta de error (ej. "404: Not Found")
+        local function fanArtLooksLikeImage(data)
+            if type(data) ~= "string" or #data < 10 then return false end
+            return data:sub(1, 4) == "\137PNG" or data:sub(1, 3) == "\255\216\255"
+        end
+
+        for _, art in ipairs(FanArt_Items) do
+            local Card = mk("Frame", {
+                Parent = FanArtPage,
+                Size = UDim2.new(1, 0, 0, 260),
+                BackgroundColor3 = Theme.Secondary,
+                BackgroundTransparency = 0.4,
+                BorderSizePixel = 0,
+                ZIndex = 9,
+            })
+            Card:SetAttribute("ThemeRole", "Secondary")
+            corner(Card, 10)
+            stroke(Card, Theme.Stroke, 1.5, 0.4)
+
+            local ArtImage = mk("ImageLabel", {
+                Parent = Card,
+                Size = UDim2.new(1, -20, 1, -20),
+                Position = UDim2.new(0, 10, 0, 10),
+                BackgroundTransparency = 1,
+                Image = "",
+                ScaleType = Enum.ScaleType.Fit,
+                Visible = false,
+                ZIndex = 10,
+            })
+            corner(ArtImage, 8)
+
+            local ArtStatus = mk("TextLabel", {
+                Parent = Card,
+                Size = UDim2.new(1, -20, 1, -20),
+                Position = UDim2.new(0, 10, 0, 10),
+                BackgroundTransparency = 1,
+                Text = GetText("Cargando imagen...", "Loading image..."),
+                TextColor3 = Theme.Text,
+                TextSize = 13,
+                Font = Enum.Font.Gotham,
+                TextWrapped = true,
+                ZIndex = 10,
+            })
+            ArtStatus:SetAttribute("ThemeTextRole", "Text")
+            ArtStatus:SetAttribute("TextSpanish", "Cargando imagen...")
+            ArtStatus:SetAttribute("TextEnglish", "Loading image...")
+
+            local function setArtStatus(es, en)
+                ArtStatus.Text = GetText(es, en)
+                ArtStatus:SetAttribute("TextSpanish", es)
+                ArtStatus:SetAttribute("TextEnglish", en)
+            end
+
+            task.spawn(function()
+                if not fanArtExecutorOk then
+                    setArtStatus("Tu ejecutor no soporta la descarga de imágenes", "Your executor does not support image downloads")
+                    return
+                end
+
+                local assetId = nil
+                pcall(function()
+                    --// Si el archivo ya existe en disco y es válido, saltar la descarga
+                    local needDownload = true
+                    local cachedOk, cachedExists = pcall(isfile, art.name)
+                    if cachedOk and cachedExists then
+                        needDownload = false
+                        if type(readfile) == "function" then
+                            local readOk, cachedData = pcall(readfile, art.name)
+                            if not (readOk and fanArtLooksLikeImage(cachedData)) then
+                                needDownload = true
+                            end
+                        end
+                    end
+
+                    if needDownload then
+                        local dlOk, data = pcall(game.HttpGet, game, art.url, true)
+                        if not dlOk or not fanArtLooksLikeImage(data) then return end
+                        local writeOk = pcall(writefile, art.name, data)
+                        if not writeOk then return end
+                    end
+
+                    --// Convertir el archivo local en un asset Roblox-compatible
+                    local assetOk, result = pcall(getcustomasset, art.name)
+                    if assetOk and type(result) == "string" and result ~= "" then
+                        assetId = result
+                    end
+                end)
+
+                if assetId then
+                    ArtImage.Image = assetId
+                    ArtImage.Visible = true
+                    ArtStatus.Visible = false
+                else
+                    setArtStatus("No se pudo cargar la imagen", "Could not load the image")
+                end
+            end)
+        end
+    end
+    Window:CreateFanArtTab()
 
     return Window
 
