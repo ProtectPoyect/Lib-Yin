@@ -9358,7 +9358,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     end
 
     
-    local AutoTabInicio = Window:CreateTab("Inicio", "Home", "rbxassetid://71085559019524")
+    local AutoTabInicio = Window:CreateTab("Inicio", "Home", "rbxassetid://99086270459218")
     AutoTabInicio:CreateWelcomeCard()
     AutoTabInicio:CreateDivider()
     AutoTabInicio:CreateServerInfoCard()
@@ -9367,10 +9367,10 @@ function YinYang:CreateWindow(title_text, startTheme)
         if not okStats then warn("[Stats] " .. tostring(errStats)) end
     end)
 
-    AutoTabFavoritosRef = Window:CreateTab("Favo", "Favs", "rbxassetid://101062763457687")
+    AutoTabFavoritosRef = Window:CreateTab("Favo", "Favs", "rbxassetid://73478474568009")
 
     local function BuildTemasTab()
-    local AutoTabTemas = Window:CreateTab("Temas", "Themes", "rbxassetid://108938004711116")
+    local AutoTabTemas = Window:CreateTab("Temas", "Themes", "rbxassetid://101821169974833")
     AutoTabTemas:CreateLabel("Temas Personalizados", "Custom Themes", 14)
     AutoTabTemas:CreateDivider()
 
@@ -10534,7 +10534,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     end
     BuildTemasTab()
 
-    local AutoTabEfectos = Window:CreateTab("Efectos", "Effects", "rbxassetid://132646825035547")
+    local AutoTabEfectos = Window:CreateTab("Efectos", "Effects", "rbxassetid://72741468127071")
 
     local EffectsPage = AutoTabEfectos.Page
     EffectsPage.ScrollBarThickness = 2
@@ -13636,7 +13636,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         end
     end
 
-    local AutoTabShaders = Window:CreateTab("Shaders", "Shaders", "rbxassetid://125878144912717")
+    local AutoTabShaders = Window:CreateTab("Shaders", "Shaders", "rbxassetid://132270533063321")
     AutoTabShaders:CreateLabel("Sistema de Shaders Roblox", "Roblox Shader System", 16)
     AutoTabShaders:CreateLabel(
         "Elegí un modo visual o abrí Personalizado para ajustar cada parámetro sin tocar los sliders del resto de la librería.",
@@ -13900,7 +13900,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         table.clear(ChatCornerEntries)
     end
 
-    local AutoTabAjustes = Window:CreateTab("Ajustes", "Settings", "rbxassetid://130729134186771")
+    local AutoTabAjustes = Window:CreateTab("Ajustes", "Settings", "rbxassetid://98148562257039")
     BuildAjustesExtras(
         Window,
         AutoTabAjustes,
@@ -14089,7 +14089,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         end)
     end
 
-    local ChatTab = Window:CreateTab("Chat", "Chat", "rbxassetid://115216752353020")
+    local ChatTab = Window:CreateTab("Chat", "Chat", "rbxassetid://82910060656954")
     local ChatTabPage = ChatTab.Page
     
     ChatTabPage.AutomaticCanvasSize = Enum.AutomaticSize.None
@@ -16536,7 +16536,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     Window:CreateCreditsTab()
 
     local function BuildLogoTab()
-    local TabLogo = Window:CreateTab("Logo", "Logo", "rbxassetid://108826395775289")
+    local TabLogo = Window:CreateTab("Logo", "Logo", "rbxassetid://102470093365848")
     local LogoPage = TabLogo.Page
 
     LogoPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
@@ -16715,7 +16715,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     Window:CreateClassicTab()
 
     function Window:CreateSpotifyTab()
-    local STab = Window:CreateTab("Spotify", "Spotify", "rbxassetid://133998910541098")
+    local STab = Window:CreateTab("Spotify", "Spotify", "rbxassetid://97213700655604")
     local SPage = STab.Page
 
     SPage.BackgroundColor3 = Theme.Background
@@ -19098,7 +19098,7 @@ clearSongRows = function()
     end
 
     function Window:CreateFanArtTab()
-        local TabFanArt = Window:CreateTab("Fan Art", "Fan Art", "rbxassetid://126747088420494")
+        local TabFanArt = Window:CreateTab("Fan Art", "Fan Art", "rbxassetid://91504176503119")
         local FanArtPage = TabFanArt.Page
 
         local FanArt_Items = {
