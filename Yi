@@ -16212,7 +16212,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     end)
 
     function Window:CreateCreditsTab()
-    local TabCreditos = Window:CreateTab("Créditos", "Credits", "rbxassetid://72420970081590")
+    local TabCreditos = Window:CreateTab("Créditos", "Credits", "rbxassetid://99086270459218")
     local CredPage = TabCreditos.Page
 
     CredPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
@@ -16688,7 +16688,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     BuildLogoTab()
 
     function Window:CreateClassicTab()
-    local TabClassic = Window:CreateTab("Classic", "Classic", "rbxassetid://133075318340622")
+    local TabClassic = Window:CreateTab("Classic", "Classic", "rbxassetid://99086270459218")
     local ClassicPage = TabClassic.Page
 
     ClassicPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
