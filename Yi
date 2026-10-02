@@ -1014,6 +1014,8 @@ local function LoadStickers()
         if sticker.Image then
             StickerPalettes[name] = {
                 Image = sticker.Image,
+                Frames = sticker.Frames,
+                Interval = sticker.Interval,
                 LabelES = sticker.LabelES or name,
                 LabelEN = sticker.LabelEN or name,
             }
@@ -14215,6 +14217,89 @@ function YinYang:CreateWindow(title_text, startTheme)
     local CORNER_MESSAGE_LIFETIME = 5
     local ApplyChatCornerSpecialEffects
 
+    Window.StickerKit = {}
+
+    Window.StickerKit.Interval = function(value)
+        local n = tonumber(value)
+        if not n then
+            return 0.5
+        end
+        return math.max(0.1, math.min(5, n))
+    end
+
+    Window.StickerKit.Normalize = function(list)
+        if type(list) ~= "table" then
+            return nil
+        end
+        local frames = {}
+        for _, id in ipairs(list) do
+            if type(id) == "string" and id:match("^rbxassetid://%d+$") and #frames < 3 then
+                frames[#frames + 1] = id
+            end
+        end
+        if #frames < 2 then
+            return nil
+        end
+        return frames
+    end
+
+    Window.StickerKit.Parse = function(text)
+        local body = tostring(text):match("^%[%[STICKER:(.-)%]%]$")
+        if not body then
+            return nil
+        end
+        local frames = {}
+        local interval = nil
+        for token in body:gmatch("[^|]+") do
+            if token:match("^rbxassetid://%d+$") then
+                frames[#frames + 1] = token
+            elseif tonumber(token) and not interval then
+                interval = Window.StickerKit.Interval(token)
+            else
+                return nil
+            end
+        end
+        if #frames < 1 or #frames > 3 then
+            return nil
+        end
+        if #frames == 1 then
+            return frames, nil
+        end
+        return frames, interval or 0.5
+    end
+
+    Window.StickerKit.Build = function(assetId, frames, interval)
+        local list = Window.StickerKit.Normalize(frames)
+        if not list then
+            return "[[STICKER:" .. assetId .. "]]"
+        end
+        return "[[STICKER:" .. table.concat(list, "|") .. "|" .. tostring(Window.StickerKit.Interval(interval)) .. "]]"
+    end
+
+    Window.StickerKit.Animate = function(label, frames, interval)
+        local list = Window.StickerKit.Normalize(frames)
+        if not label or not list then
+            return label
+        end
+        local step = Window.StickerKit.Interval(interval)
+        task.spawn(function()
+            pcall(function()
+                game:GetService("ContentProvider"):PreloadAsync(list)
+            end)
+            local index = 1
+            label.Image = list[1]
+            while label.Parent do
+                task.wait(step)
+                if not label.Parent then
+                    break
+                end
+                index = index % #list + 1
+                label.Image = list[index]
+            end
+        end)
+        return label
+    end
+
     local function ShowChatCornerMessage(playerName, userId, messageText)
         if not ChatCornerMessagesEnabled or not ChatCornerContainer then
             return
@@ -14233,7 +14318,8 @@ function YinYang:CreateWindow(title_text, startTheme)
             end
         end
 
-        local stickerAsset = text:match("^%[%[STICKER:(rbxassetid://%d+)%]%]$")
+        local stickerFrames, stickerInterval = Window.StickerKit.Parse(text)
+        local stickerAsset = stickerFrames and stickerFrames[1]
 
         while #ChatCornerEntries >= MAX_CORNER_MESSAGES do
             local oldest = table.remove(ChatCornerEntries, 1)
@@ -14294,6 +14380,7 @@ function YinYang:CreateWindow(title_text, startTheme)
                 ScaleType = Enum.ScaleType.Fit,
                 ZIndex = 102,
             })
+            Window.StickerKit.Animate(StickerThumb, stickerFrames, stickerInterval)
         else
             mk("TextLabel", {
                 Parent = Row,
@@ -15075,7 +15162,8 @@ function YinYang:CreateWindow(title_text, startTheme)
     		end
     	end
 
-    	local stickerAsset = messageText:match("^%[%[STICKER:(rbxassetid://%d+)%]%]$")
+    	local stickerFrames, stickerInterval = Window.StickerKit.Parse(messageText)
+    	local stickerAsset = stickerFrames and stickerFrames[1]
     	if stickerAsset then
     		local StickerFrame = mk("Frame", {
     			Parent = ChatContainer,
@@ -15099,7 +15187,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     			ZIndex = 13,
     		})
 
-    		mk("ImageLabel", {
+    		Window.StickerKit.Animate(mk("ImageLabel", {
     			Parent = StickerFrame,
     			Size = UDim2.new(0, 148, 0, 148),
     			Position = UDim2.new(0, 12, 0, 22),
@@ -15107,7 +15195,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     			Image = stickerAsset,
     			ScaleType = Enum.ScaleType.Fit,
     			ZIndex = 13,
-    		})
+    		}), stickerFrames, stickerInterval)
 
     		Window.TrackChatFrame(StickerFrame)
 
@@ -15827,10 +15915,10 @@ function YinYang:CreateWindow(title_text, startTheme)
         end)
     end
 
-    local function SendSticker(assetId)
+    local function SendSticker(assetId, frames, interval)
         local localPlayer = Players.LocalPlayer
         local timestamp = os.date("%H:%M:%S")
-        local stickerMsg = "[[STICKER:" .. assetId .. "]]"
+        local stickerMsg = Window.StickerKit.Build(assetId, frames, interval)
         AddChatMessage(localPlayer.Name, localPlayer.UserId, stickerMsg, timestamp)
         RenderMessage(localPlayer.Name, localPlayer.UserId, stickerMsg, timestamp, true)
         BackendSendMessage(localPlayer.Name, localPlayer.UserId, stickerMsg)
@@ -15861,7 +15949,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         BackendSendMessage(localPlayer.Name, localPlayer.UserId, inviteMsg)
     end
 
-    local function CreateStickerBtn(parent, assetId, isCustom)
+    local function CreateStickerBtn(parent, assetId, isCustom, frames, interval)
         local StickerBtn = mk("ImageButton", {
             Parent = parent,
             Size = UDim2.new(0, 68, 0, 68),
@@ -15873,9 +15961,10 @@ function YinYang:CreateWindow(title_text, startTheme)
             ZIndex = 53,
         })
         corner(StickerBtn, 8)
+        Window.StickerKit.Animate(StickerBtn, frames, interval)
 
         StickerBtn.MouseButton1Click:Connect(function()
-            SendSticker(assetId)
+            SendSticker(assetId, frames, interval)
         end)
 
         StickerBtn.MouseEnter:Connect(function()
@@ -15921,7 +16010,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     for _, name in ipairs(stickerOrder) do
         local sticker = StickerPalettes[name]
         if sticker and sticker.Image then
-            CreateStickerBtn(StickerGrid, sticker.Image, false)
+            CreateStickerBtn(StickerGrid, sticker.Image, false, Window.StickerKit.Normalize(sticker.Frames), sticker.Interval)
         end
     end
 
