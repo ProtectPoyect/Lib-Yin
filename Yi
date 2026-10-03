@@ -14086,7 +14086,32 @@ function YinYang:CreateWindow(title_text, startTheme)
         POLL_RATE = 30,
         CID_PREFIX = "yy_",
         seen = {},
+        SCRIPT_NAME = "YinYang",
+        SCRIPT_IMG = "rbxassetid://113137557066757",
+        PRESENCE_RATE = 20,
+        PRESENCE_WINDOW_MS = 60000,
+        rwOnline = 0,
+        fbOnline = 0,
     }
+
+    -- Solo se consulta Firebase mientras la ventana principal esta abierta
+    function FB.IsWindowOpen()
+        local ok, open = pcall(function()
+            return Main ~= nil and Main.Parent ~= nil and Main.Visible == true
+        end)
+        return ok and open == true
+    end
+
+    -- Contador online = Railway + Firebase (barra superior y cabecera del chat)
+    function FB.UpdateOnline()
+        local total = (FB.rwOnline or 0) + (FB.fbOnline or 0)
+        pcall(function() TopBarOnlineLabel.Text = tostring(total) end)
+        pcall(function()
+            if FB.HeaderLabel then
+                FB.HeaderLabel.Text = "Global Chat \194\183 online " .. tostring(total)
+            end
+        end)
+    end
 
     function FB.Send(playerName, playerId, message)
         if tostring(playerId) ~= tostring(LocalPlayer.UserId) then return end
@@ -14108,6 +14133,8 @@ function YinYang:CreateWindow(title_text, startTheme)
                     cid  = FB.CID_PREFIX .. tostring(LocalPlayer.UserId) .. "_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
                     t    = inviteJob and "invite" or "msg",
                     ts   = { [".sv"] = "timestamp" },
+                    script    = FB.SCRIPT_NAME,
+                    scriptImg = FB.SCRIPT_IMG,
                 }
                 if inviteJob then
                     payload.job = inviteJob
@@ -14140,12 +14167,22 @@ function YinYang:CreateWindow(title_text, startTheme)
         task.spawn(function()
             local myGen = _G.__ChatLoopGen
             while _G.__ChatLoopGen == myGen do
-                local ok, response = pcall(function()
-                    return UniversalRequest({
-                        Url = FB.BASE .. "chat/" .. FB.ROOM .. "/messages.json?orderBy=%22$key%22&limitToLast=40",
-                        Method = "GET",
-                    })
-                end)
+                local windowOpen = FB.IsWindowOpen()
+                if windowOpen and FB.pollWasClosed then
+                    FB.pollWasClosed = false
+                    initialSyncComplete = false
+                end
+                local ok, response = false, nil
+                if windowOpen then
+                    ok, response = pcall(function()
+                        return UniversalRequest({
+                            Url = FB.BASE .. "chat/" .. FB.ROOM .. "/messages.json?orderBy=%22$key%22&limitToLast=40",
+                            Method = "GET",
+                        })
+                    end)
+                else
+                    FB.pollWasClosed = true
+                end
 
                 if ok and response and response.Body then
                     local success, data = pcall(HttpService.JSONDecode, HttpService, response.Body)
@@ -14185,8 +14222,15 @@ function YinYang:CreateWindow(title_text, startTheme)
                                                 invite = { job = msg.job, place = place, game = gameName }
                                             end
                                         end
+                                        local brand = nil
+                                        do
+                                            local sName = type(msg.script) == "string" and msg.script:gsub("%c", ""):sub(1, 24) or nil
+                                            if sName == "" then sName = nil end
+                                            local sImg = type(msg.scriptImg) == "string" and msg.scriptImg:match("^rbxassetid://%d+$") or nil
+                                            if sName or sImg then brand = { name = sName, img = sImg } end
+                                        end
                                         if msg.t ~= "invite" or invite then
-                                            task.spawn(onNewMessage, msg.user, tonumber(msg.uid), msg.text:sub(1, MAX_CHAR), seconds, not initialSyncComplete, invite)
+                                            task.spawn(onNewMessage, msg.user, tonumber(msg.uid), msg.text:sub(1, MAX_CHAR), seconds, not initialSyncComplete, invite, brand)
                                         end
                                     end
                                 end
@@ -14196,7 +14240,54 @@ function YinYang:CreateWindow(title_text, startTheme)
                     end
                 end
 
-                task.wait(FB.POLL_RATE)
+                task.wait(windowOpen and FB.POLL_RATE or 1)
+            end
+        end)
+    end
+
+    -- Presencia compartida: PUT presence/{UserId} y GET presence.json solo con la ventana abierta
+    function FB.StartPresence()
+        task.spawn(function()
+            local myGen = _G.__ChatLoopGen
+            local lastRead = -math.huge
+            while _G.__ChatLoopGen == myGen do
+                if FB.IsWindowOpen() then
+                    pcall(function()
+                        UniversalRequest({
+                            Url = FB.BASE .. "presence/" .. tostring(LocalPlayer.UserId) .. ".json",
+                            Method = "PUT",
+                            Headers = { ["Content-Type"] = "application/json" },
+                            Body = HttpService:JSONEncode({ n = LocalPlayer.Name, t = { [".sv"] = "timestamp" } }),
+                        })
+                    end)
+                    if os.clock() - lastRead >= FB.POLL_RATE then
+                        lastRead = os.clock()
+                        pcall(function()
+                            local response = UniversalRequest({
+                                Url = FB.BASE .. "presence.json",
+                                Method = "GET",
+                            })
+                            if response and response.Body then
+                                local okDecode, data = pcall(HttpService.JSONDecode, HttpService, response.Body)
+                                if okDecode and type(data) == "table" and type(data.error) ~= "string" then
+                                    local nowMs = os.time() * 1000
+                                    local count = 0
+                                    for _, entry in pairs(data) do
+                                        local t = type(entry) == "table" and tonumber(entry.t) or nil
+                                        if t and (nowMs - t) < FB.PRESENCE_WINDOW_MS then
+                                            count = count + 1
+                                        end
+                                    end
+                                    FB.fbOnline = count
+                                    FB.UpdateOnline()
+                                end
+                            end
+                        end)
+                    end
+                    task.wait(FB.PRESENCE_RATE)
+                else
+                    task.wait(1)
+                end
             end
         end)
     end
@@ -14266,7 +14357,8 @@ function YinYang:CreateWindow(title_text, startTheme)
                             pcall(function()
                                 OnlineLabel.Text = tostring(data.onlineCount)
                             end)
-                            TopBarOnlineLabel.Text = tostring(data.onlineCount)
+                            FB.rwOnline = tonumber(data.onlineCount) or 0
+                            FB.UpdateOnline()
                         elseif data.messages then
                             local uniqueIds = {}
                             for _, msg in ipairs(data.messages) do
@@ -14279,7 +14371,8 @@ function YinYang:CreateWindow(title_text, startTheme)
                             pcall(function()
                                 OnlineLabel.Text = tostring(count)
                             end)
-                            TopBarOnlineLabel.Text = tostring(count)
+                            FB.rwOnline = count
+                            FB.UpdateOnline()
                         end
                     end
                 else
@@ -14290,7 +14383,8 @@ function YinYang:CreateWindow(title_text, startTheme)
                     pcall(function()
                         OnlineLabel.Text = "0"
                     end)
-                    TopBarOnlineLabel.Text = "0"
+                    FB.rwOnline = 0
+                    FB.UpdateOnline()
                 end
 
                 task.wait(ChatSyncPollRate)
@@ -14723,6 +14817,8 @@ function YinYang:CreateWindow(title_text, startTheme)
     	LayoutOrder = 1,
     	ZIndex = 11,
     })
+
+    FB.HeaderLabel = HeaderLabel
 
     local OnlineLabel = nil
 
@@ -15361,7 +15457,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     	ScrollChatToBottom(isSelf)
     end
 
-    local function RenderMessage(playerName, userId, messageText, timeStamp, isSelf, msgId, fromLang)
+    local function RenderMessage(playerName, userId, messageText, timeStamp, isSelf, msgId, fromLang, brand)
     	local replyInfo = nil
     	do
     		local rName, rType, rContent, rRest = messageText:match("^%[%[REPLY:(.-)\1(.-)\1(.-)%]%](.*)$")
@@ -15540,6 +15636,50 @@ function YinYang:CreateWindow(title_text, startTheme)
     	    ZIndex = 15,
     	})
     	UsernameLabel:SetAttribute("ThemeTextRole", "Text")
+
+    	if brand and (brand.img or brand.name) then
+    	    local brandIcon = nil
+    	    local brandTag = nil
+    	    if brand.img then
+    	        brandIcon = mk("ImageLabel", {
+    	            Parent = HeaderFrame,
+    	            Size = UDim2.fromOffset(16, 16),
+    	            Position = UDim2.new(0, 0, 0.5, -8),
+    	            BackgroundTransparency = 1,
+    	            Image = brand.img,
+    	            ScaleType = Enum.ScaleType.Fit,
+    	            ZIndex = 15,
+    	        })
+    	    end
+    	    if brand.name then
+    	        brandTag = mk("TextLabel", {
+    	            Parent = HeaderFrame,
+    	            Size = UDim2.new(0, 0, 1, 0),
+    	            Position = UDim2.new(0, 0, 0, 0),
+    	            BackgroundTransparency = 1,
+    	            Text = "[" .. brand.name .. "]",
+    	            Font = Enum.Font.GothamMedium,
+    	            TextSize = 10,
+    	            TextColor3 = Theme.TextDim,
+    	            TextXAlignment = Enum.TextXAlignment.Left,
+    	            TextYAlignment = Enum.TextYAlignment.Center,
+    	            AutomaticSize = Enum.AutomaticSize.X,
+    	            ZIndex = 15,
+    	        })
+    	    end
+    	    local function placeBrand()
+    	        local x = UsernameLabel.TextBounds.X + 4
+    	        if brandIcon then
+    	            brandIcon.Position = UDim2.new(0, x, 0.5, -8)
+    	            x = x + 20
+    	        end
+    	        if brandTag then
+    	            brandTag.Position = UDim2.new(0, x, 0, 0)
+    	        end
+    	    end
+    	    placeBrand()
+    	    UsernameLabel:GetPropertyChangedSignal("TextBounds"):Connect(placeBrand)
+    	end
 
     	local specialUser = GetSpecialUser(userId)
     	if specialUser then
@@ -16365,7 +16505,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         addUnread()
     end)
 
-    FB.StartPolling(function(playerName, userId, text, timestamp, isInitialSync, invite)
+    FB.StartPolling(function(playerName, userId, text, timestamp, isInitialSync, invite, brand)
         local timeText = os.date("%H:%M:%S", timestamp)
         if invite then
             AddChatMessage(playerName, userId, "[[SERVERINVITE:" .. invite.job .. "]]", timeText)
@@ -16374,12 +16514,14 @@ function YinYang:CreateWindow(title_text, startTheme)
             return
         end
         AddChatMessage(playerName, userId, text, timeText)
-        RenderMessage(playerName, userId, text, timeText, false)
+        RenderMessage(playerName, userId, text, timeText, false, nil, nil, brand)
         if not isInitialSync then
             ShowChatCornerMessage(playerName, userId, text)
         end
         addUnread()
     end)
+
+    FB.StartPresence()
 
     task.spawn(function()
         local myGen = _G.__ChatLoopGen
