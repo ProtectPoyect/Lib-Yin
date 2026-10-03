@@ -2264,7 +2264,7 @@ function YinYang:CreateWindow(title_text, startTheme)
                 tSpeed      = layerDef.Speed or 60,
                 time        = 0,
                 turboEndTime = 0,
-                turboSpeed   = 350,
+                turboSpeed   = layerDef.TurboSpeed or 350,
             }
             table.insert(logoLayers, { label = label, def = layerDef, state = state })
         end
@@ -2600,7 +2600,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         local turboEnd = os.clock() + 4
         for _, entry in ipairs(logoLayers) do
             if entry.def.Movement == "Spin" then
-                entry.state.turboEndTime = turboEnd
+                entry.state.turboEndTime = entry.def.TurboSeconds and (os.clock() + entry.def.TurboSeconds) or turboEnd
             end
         end
     end
