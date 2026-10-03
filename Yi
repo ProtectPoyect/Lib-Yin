@@ -14088,6 +14088,8 @@ function YinYang:CreateWindow(title_text, startTheme)
         seen = {},
         SCRIPT_NAME = "YinYang",
         SCRIPT_IMG = "rbxassetid://113137557066757",
+        OWNER_ID = 9549448191,
+        OWNER_TAG = "Owner \194\183 YinYang",
         PRESENCE_RATE = 20,
         PRESENCE_WINDOW_MS = 60000,
         rwOnline = 0,
@@ -15637,10 +15639,12 @@ function YinYang:CreateWindow(title_text, startTheme)
     	})
     	UsernameLabel:SetAttribute("ThemeTextRole", "Text")
 
-    	if brand and (brand.img or brand.name) then
+    	local isOwnerUser = tonumber(userId) == FB.OWNER_ID
+    	if isOwnerUser or (brand and (brand.img or brand.name)) then
     	    local brandIcon = nil
     	    local brandTag = nil
-    	    if brand.img then
+    	    local ownerTag = nil
+    	    if brand and brand.img then
     	        brandIcon = mk("ImageLabel", {
     	            Parent = HeaderFrame,
     	            Size = UDim2.fromOffset(16, 16),
@@ -15651,7 +15655,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     	            ZIndex = 15,
     	        })
     	    end
-    	    if brand.name then
+    	    if brand and brand.name then
     	        brandTag = mk("TextLabel", {
     	            Parent = HeaderFrame,
     	            Size = UDim2.new(0, 0, 1, 0),
@@ -15667,8 +15671,29 @@ function YinYang:CreateWindow(title_text, startTheme)
     	            ZIndex = 15,
     	        })
     	    end
+    	    if isOwnerUser then
+    	        ownerTag = mk("TextLabel", {
+    	            Parent = HeaderFrame,
+    	            Size = UDim2.new(0, 0, 1, 0),
+    	            Position = UDim2.new(0, 0, 0, 0),
+    	            BackgroundTransparency = 1,
+    	            Text = FB.OWNER_TAG,
+    	            Font = Enum.Font.GothamBold,
+    	            TextSize = 10,
+    	            TextColor3 = Theme.Accent,
+    	            TextXAlignment = Enum.TextXAlignment.Left,
+    	            TextYAlignment = Enum.TextYAlignment.Center,
+    	            AutomaticSize = Enum.AutomaticSize.X,
+    	            ZIndex = 15,
+    	        })
+    	        ownerTag:SetAttribute("ThemeTextRole", "Accent")
+    	    end
     	    local function placeBrand()
     	        local x = UsernameLabel.TextBounds.X + 4
+    	        if ownerTag then
+    	            ownerTag.Position = UDim2.new(0, x, 0, 0)
+    	            x = x + ownerTag.TextBounds.X + 4
+    	        end
     	        if brandIcon then
     	            brandIcon.Position = UDim2.new(0, x, 0.5, -8)
     	            x = x + 20
@@ -15679,6 +15704,9 @@ function YinYang:CreateWindow(title_text, startTheme)
     	    end
     	    placeBrand()
     	    UsernameLabel:GetPropertyChangedSignal("TextBounds"):Connect(placeBrand)
+    	    if ownerTag then
+    	        ownerTag:GetPropertyChangedSignal("TextBounds"):Connect(placeBrand)
+    	    end
     	end
 
     	local specialUser = GetSpecialUser(userId)
