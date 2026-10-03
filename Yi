@@ -4564,7 +4564,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         if #Window.Tabs == 1 then Select() end
 
 
-        function Tab:CreateFloatingToggle(textSpanish, textEnglishOrDefault, defaultOrCallback, callback)
+        function Tab:CreateFloatingToggle(textSpanish, textEnglishOrDefault, defaultOrCallback, callback, creditInfo)
             local textEnglish = textSpanish
             local default, cb
 
@@ -4586,14 +4586,20 @@ function YinYang:CreateWindow(title_text, startTheme)
             local tog = self:CreateToggle(textSpanish, textEnglish, state, function(newState)
                 state = newState
                 pcall(cb, state)
-            end)
+            end, nil, creditInfo)
 
             local Holder     = tog.Holder
             local HolderSwitch = tog.Switch
             local HolderClick  = tog.Click
 
-            Holder.Size = UDim2.new(1, 0, 0, 92)
-            HolderSwitch.Position = UDim2.new(1, -66, 0, 18)
+            local credHasBadge = type(creditInfo) == "table" and (creditInfo.imageId or creditInfo.name) and true or false
+            local credHasDesc  = type(creditInfo) == "table" and type(creditInfo.description) == "string" and #creditInfo.description > 0
+            local hasCredit    = credHasBadge or credHasDesc
+            local credZoneH    = (credHasBadge and credHasDesc) and 110 or 90
+            local credRowY     = credZoneH + 4
+
+            Holder.Size = hasCredit and UDim2.new(1, 0, 0, credZoneH + 38) or UDim2.new(1, 0, 0, 92)
+            HolderSwitch.Position = hasCredit and UDim2.new(1, -66, 0, math.floor(credZoneH / 2) - 14) or UDim2.new(1, -66, 0, 18)
 
             local DetachBtn = mk("TextButton", {
                 Parent = Holder,
@@ -4669,6 +4675,20 @@ function YinYang:CreateWindow(title_text, startTheme)
             KeybindBtn:SetAttribute("ThemeTextRole", "TextDim")
             corner(KeybindBtn, 6)
             stroke(KeybindBtn, Theme.Stroke, 1, 0.45)
+
+            if hasCredit then
+                ComboBtn.Position   = UDim2.new(0, 22,   0, credRowY + 2)
+                FavBtn.Position     = UDim2.new(0, 50,   0, credRowY - 3)
+                DetachBtn.Position  = UDim2.new(0, 88,   0, credRowY)
+                PinBtn.Position     = UDim2.new(0, 120,  0, credRowY)
+                KeybindBtn.Position = UDim2.new(1, -132, 0, credRowY + 3)
+                for _, child in ipairs(Holder:GetChildren()) do
+                    if child:IsA("Frame") and child.Size.X.Offset == 3 and child.Size.Y.Offset == 36 then
+                        child.Position = UDim2.new(0, 10, 0, math.floor(credZoneH / 2) - 18)
+                        break
+                    end
+                end
+            end
 
             local _linkedSliderRef    = nil
             local _linkedSliderFavRow = nil
@@ -4768,7 +4788,7 @@ function YinYang:CreateWindow(title_text, startTheme)
                 end
             end
 
-            HolderClick.Size = UDim2.new(1, -176, 1, 0)
+            HolderClick.Size = hasCredit and UDim2.new(1, 0, 0, credZoneH) or UDim2.new(1, -176, 1, 0)
             HolderClick.ZIndex = 14
             
             
@@ -5118,6 +5138,29 @@ function YinYang:CreateWindow(title_text, startTheme)
             syncFavoriteRow()
 
             resetScrollTop(TabPage)
+
+            return {
+                SetValue = function(value)
+                    state = value
+                    tog.SetValue(value)
+                    if favRow and favRow.SetValue then
+                        favRow.SetValue(value)
+                    end
+                    if FloatingWindow then
+                        for _, ft in ipairs(Window.FloatingToggles) do
+                            if ft.Window == FloatingWindow then
+                                pcall(ft.RefreshVisual)
+                            end
+                        end
+                    end
+                end,
+                GetValue = function()
+                    return state
+                end,
+                Holder = Holder,
+                Switch = HolderSwitch,
+                Click = HolderClick,
+            }
         end
 
 
