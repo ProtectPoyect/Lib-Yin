@@ -14008,20 +14008,35 @@ function YinYang:CreateWindow(title_text, startTheme)
         local text = tostring(message or "")
         local replyRest = text:match("^%[%[REPLY:.-\1.-\1.-%]%](.*)$")
         if replyRest then text = replyRest end
-        if text:match("^%[%[ANUNCIO%]%]") or text:match("^%[%[SERVERINVITE:") then return end
+        if text:match("^%[%[ANUNCIO%]%]") then return end
+        local inviteJob = text:match("^%[%[SERVERINVITE:([%w%-]+)%]%]$")
+        if text:match("^%[%[SERVERINVITE:") and not (inviteJob and #inviteJob <= 60) then return end
         text = text:sub(1, MAX_CHAR)
         if text:match("^%s*$") then return end
         task.spawn(function()
             local ok, result = pcall(function()
-                local body = HttpService:JSONEncode({
+                local payload = {
                     uid  = LocalPlayer.UserId,
                     user = LocalPlayer.Name,
                     dn   = LocalPlayer.DisplayName,
-                    text = text,
+                    text = inviteJob and "invite" or text,
                     cid  = FB.CID_PREFIX .. tostring(LocalPlayer.UserId) .. "_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
-                    t    = "msg",
+                    t    = inviteJob and "invite" or "msg",
                     ts   = { [".sv"] = "timestamp" },
-                })
+                }
+                if inviteJob then
+                    payload.job = inviteJob
+                    payload.place = game.PlaceId
+                    pcall(function()
+                        local gameName = tostring(game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name or "")
+                        if gameName ~= "" then payload.game = gameName:sub(1, 100) end
+                    end)
+                    pcall(function()
+                        payload.pc = #Players:GetPlayers()
+                        payload.mx = Players.MaxPlayers
+                    end)
+                end
+                local body = HttpService:JSONEncode(payload)
                 return UniversalRequest({
                     Url = FB.BASE .. "chat/" .. FB.ROOM .. "/messages.json",
                     Method = "POST",
@@ -14064,7 +14079,7 @@ function YinYang:CreateWindow(title_text, startTheme)
                                 if not FB.seen[key] then
                                     FB.seen[key] = true
                                     if type(msg) == "table"
-                                        and msg.t == "msg"
+                                        and (msg.t == "msg" or msg.t == "invite")
                                         and type(msg.text) == "string"
                                         and type(msg.user) == "string"
                                         and tonumber(msg.uid)
@@ -14075,7 +14090,19 @@ function YinYang:CreateWindow(title_text, startTheme)
                                         and not msg.text:match("^%s*$") then
                                         local seconds = tonumber(msg.ts)
                                         seconds = seconds and math.floor(seconds / 1000) or os.time()
-                                        task.spawn(onNewMessage, msg.user, tonumber(msg.uid), msg.text:sub(1, MAX_CHAR), seconds, not initialSyncComplete)
+                                        local invite = nil
+                                        if msg.t == "invite" then
+                                            local place = msg.place
+                                            if type(msg.job) == "string" and #msg.job > 0 and #msg.job <= 60 and msg.job:match("^[%w%-]+$")
+                                                and type(place) == "number" and place == place and place > 0 and place < math.huge and place % 1 == 0 then
+                                                local gameName = type(msg.game) == "string" and msg.game:gsub("%c", ""):sub(1, 100) or nil
+                                                if gameName == "" then gameName = nil end
+                                                invite = { job = msg.job, place = place, game = gameName }
+                                            end
+                                        end
+                                        if msg.t ~= "invite" or invite then
+                                            task.spawn(onNewMessage, msg.user, tonumber(msg.uid), msg.text:sub(1, MAX_CHAR), seconds, not initialSyncComplete, invite)
+                                        end
                                     end
                                 end
                             end
@@ -15027,7 +15054,7 @@ function YinYang:CreateWindow(title_text, startTheme)
         end
     end
 
-    Window.RenderInviteCard = function(playerName, userId, timeStamp, isSelf, inviteJobId)
+    Window.RenderInviteCard = function(playerName, userId, timeStamp, isSelf, inviteJobId, invitePlaceId, inviteGameName)
     	local MessageFrame = mk("Frame", {
     		Parent = ChatContainer,
     		Size = UDim2.new(1, 0, 0, 0),
@@ -15180,7 +15207,7 @@ function YinYang:CreateWindow(title_text, startTheme)
     		Size = UDim2.new(1, -84, 0, 14),
     		Position = UDim2.new(0, 38, 0, 70),
     		BackgroundTransparency = 1,
-    		Text = "Yin Yang Invitation Server",
+    		Text = inviteGameName or "Yin Yang Invitation Server",
     		Font = Enum.Font.GothamBold,
     		TextSize = 11,
     		TextColor3 = Theme.Text,
@@ -15232,7 +15259,7 @@ function YinYang:CreateWindow(title_text, startTheme)
 
     		InviteJoinBtn.Text = "Conectando..."
     		local teleportOk, teleportErr = pcall(function()
-    			TeleportService:TeleportToPlaceInstance(game.PlaceId, inviteJobId, Players.LocalPlayer)
+    			TeleportService:TeleportToPlaceInstance(invitePlaceId or game.PlaceId, inviteJobId, Players.LocalPlayer)
     		end)
 
     		if not teleportOk then
@@ -16253,8 +16280,14 @@ function YinYang:CreateWindow(title_text, startTheme)
         addUnread()
     end)
 
-    FB.StartPolling(function(playerName, userId, text, timestamp, isInitialSync)
+    FB.StartPolling(function(playerName, userId, text, timestamp, isInitialSync, invite)
         local timeText = os.date("%H:%M:%S", timestamp)
+        if invite then
+            AddChatMessage(playerName, userId, "[[SERVERINVITE:" .. invite.job .. "]]", timeText)
+            Window.RenderInviteCard(playerName, userId, timeText, false, invite.job, invite.place, invite.game)
+            addUnread()
+            return
+        end
         AddChatMessage(playerName, userId, text, timeText)
         RenderMessage(playerName, userId, text, timeText, false)
         if not isInitialSync then
