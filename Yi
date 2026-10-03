@@ -1991,6 +1991,52 @@ function YinYang:CreateWindow(title_text, startTheme)
     local logoRenderConn = nil
     local toggleEyesOnClick = nil
 
+    local resolveLogoClickSound
+    do
+        local resolved = {}
+        resolveLogoClickSound = function(iconName, clickS, allowDownload)
+            local url = clickS and clickS.Url
+            if type(url) ~= "string" or url == "" then return nil end
+
+            local cacheName = clickS.CacheName
+            if type(cacheName) ~= "string" or cacheName == "" then
+                cacheName = "YinYang_IconClick_" .. tostring(iconName) .. ".mp3"
+            end
+
+            if resolved[cacheName] then return resolved[cacheName] end
+            if not getcustomasset then return nil end
+
+            local exists = false
+            if isfile then
+                local okFile, resultFile = pcall(function() return isfile(cacheName) end)
+                exists = okFile and resultFile == true
+            end
+
+            if not exists then
+                if not allowDownload or not writefile then return nil end
+
+                local okDownload, data = pcall(function() return game:HttpGet(url, true) end)
+                if not okDownload or type(data) ~= "string" or #data < 10 then
+                    warn("[YinYang Icons] Falló la descarga del sonido (" .. url .. "): " .. tostring(data))
+                    return nil
+                end
+
+                local okWrite = pcall(function() writefile(cacheName, data) end)
+                if not okWrite then
+                    warn("[YinYang Icons] Falló writefile para el sonido: " .. cacheName)
+                    return nil
+                end
+            end
+
+            local okAsset, asset = pcall(function() return getcustomasset(cacheName) end)
+            if okAsset and type(asset) == "string" and asset ~= "" then
+                resolved[cacheName] = asset
+                return asset
+            end
+            return nil
+        end
+    end
+
     local function ApplyLogoIcon(iconName)
         if logoRenderConn then logoRenderConn:Disconnect(); logoRenderConn = nil end
         if logoIdleConn   then logoIdleConn:Disconnect();   logoIdleConn   = nil end
@@ -2023,6 +2069,10 @@ function YinYang:CreateWindow(title_text, startTheme)
         local iconData = IconCatalog.Icons[iconName]
             or IconCatalog.Icons["ClassicYinYang"]
         if not iconData then return end
+
+        if iconData.ClickSound and type(iconData.ClickSound.Url) == "string" and iconData.ClickSound.Url ~= "" then
+            task.spawn(resolveLogoClickSound, iconName, iconData.ClickSound, true)
+        end
 
         if iconData.Type == "Capsule" then
             ToggleButton:SetAttribute("IsCapsule", true)
@@ -2617,7 +2667,10 @@ function YinYang:CreateWindow(title_text, startTheme)
         else
             local _iconD  = IconCatalog.Icons[SavedConfig.SelectedLogoIcon or "ClassicYinYang"]
             local _clickS = _iconD and _iconD.ClickSound
-            if _clickS and type(_clickS.Id) == "string" and _clickS.Id ~= "" then
+            local _urlAsset = _clickS and resolveLogoClickSound(SavedConfig.SelectedLogoIcon or "ClassicYinYang", _clickS, false)
+            if _urlAsset then
+                playSound(_urlAsset, _clickS.Volume or 0.6)
+            elseif _clickS and type(_clickS.Id) == "string" and _clickS.Id ~= "" then
                 playSound(_clickS.Id, _clickS.Volume or 0.6)
             else
                 playSound(Sounds.Click, 0.6)
