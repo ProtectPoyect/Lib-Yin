@@ -13994,7 +13994,104 @@ function YinYang:CreateWindow(title_text, startTheme)
             end
         end)
 
+    -- ===== Puente Firebase (sala global de la otra persona) =====
+    local FB = {
+        BASE = "https://neohyper-9a843-default-rtdb.europe-west1.firebasedatabase.app/",
+        ROOM = "global",
+        POLL_RATE = 30,
+        CID_PREFIX = "yy_",
+        seen = {},
+    }
+
+    function FB.Send(playerName, playerId, message)
+        if tostring(playerId) ~= tostring(LocalPlayer.UserId) then return end
+        local text = tostring(message or "")
+        local replyRest = text:match("^%[%[REPLY:.-\1.-\1.-%]%](.*)$")
+        if replyRest then text = replyRest end
+        if text:match("^%[%[ANUNCIO%]%]") or text:match("^%[%[SERVERINVITE:") then return end
+        text = text:sub(1, MAX_CHAR)
+        if text:match("^%s*$") then return end
+        task.spawn(function()
+            local ok, result = pcall(function()
+                local body = HttpService:JSONEncode({
+                    uid  = LocalPlayer.UserId,
+                    user = LocalPlayer.Name,
+                    dn   = LocalPlayer.DisplayName,
+                    text = text,
+                    cid  = FB.CID_PREFIX .. tostring(LocalPlayer.UserId) .. "_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999)),
+                    t    = "msg",
+                    ts   = { [".sv"] = "timestamp" },
+                })
+                return UniversalRequest({
+                    Url = FB.BASE .. "chat/" .. FB.ROOM .. "/messages.json",
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = body,
+                })
+            end)
+            if not ok or not result or (result.Success == false) then
+                warn("[ChatGlobal] Firebase: error al enviar mensaje:", ok and (result and result.StatusCode) or result)
+            end
+        end)
+    end
+
+    function FB.StartPolling(onNewMessage)
+        local initialSyncComplete = false
+        task.spawn(function()
+            local myGen = _G.__ChatLoopGen
+            while _G.__ChatLoopGen == myGen do
+                local ok, response = pcall(function()
+                    return UniversalRequest({
+                        Url = FB.BASE .. "chat/" .. FB.ROOM .. "/messages.json?orderBy=%22$key%22&limitToLast=40",
+                        Method = "GET",
+                    })
+                end)
+
+                if ok and response and response.Body then
+                    local success, data = pcall(HttpService.JSONDecode, HttpService, response.Body)
+                    if success then
+                        local list = type(data) == "table" and data or {}
+                        if type(list.error) == "string" then
+                            warn("[ChatGlobal] Firebase: " .. list.error)
+                        else
+                            local keys = {}
+                            for key in pairs(list) do
+                                keys[#keys + 1] = key
+                            end
+                            table.sort(keys)
+                            for _, key in ipairs(keys) do
+                                local msg = list[key]
+                                if not FB.seen[key] then
+                                    FB.seen[key] = true
+                                    if type(msg) == "table"
+                                        and msg.t == "msg"
+                                        and type(msg.text) == "string"
+                                        and type(msg.user) == "string"
+                                        and tonumber(msg.uid)
+                                        and tostring(msg.uid) ~= tostring(LocalPlayer.UserId)
+                                        and tostring(msg.cid or ""):sub(1, #FB.CID_PREFIX) ~= FB.CID_PREFIX
+                                        and not msg.text:match("^%[%[ANUNCIO%]%]")
+                                        and not msg.text:match("^%[%[SERVERINVITE:")
+                                        and not msg.text:match("^%s*$") then
+                                        local seconds = tonumber(msg.ts)
+                                        seconds = seconds and math.floor(seconds / 1000) or os.time()
+                                        task.spawn(onNewMessage, msg.user, tonumber(msg.uid), msg.text:sub(1, MAX_CHAR), seconds, not initialSyncComplete)
+                                    end
+                                end
+                            end
+                            initialSyncComplete = true
+                        end
+                    end
+                end
+
+                task.wait(FB.POLL_RATE)
+            end
+        end)
+    end
+    -- ===== Fin puente Firebase =====
+
     local function BackendSendMessage(playerName, playerId, message)
+        pcall(FB.Send, playerName, playerId, message)
         task.spawn(function()
             local body = HttpService:JSONEncode({
                 playerName = tostring(playerName),
@@ -16152,6 +16249,16 @@ function YinYang:CreateWindow(title_text, startTheme)
         RenderMessage(msg.playerName, msg.playerId, msg.message, os.date("%H:%M:%S", msg.timestamp), false, msg.id, msg.lang)
         if not isInitialSync then
             ShowChatCornerMessage(msg.playerName, msg.playerId, msg.message)
+        end
+        addUnread()
+    end)
+
+    FB.StartPolling(function(playerName, userId, text, timestamp, isInitialSync)
+        local timeText = os.date("%H:%M:%S", timestamp)
+        AddChatMessage(playerName, userId, text, timeText)
+        RenderMessage(playerName, userId, text, timeText, false)
+        if not isInitialSync then
+            ShowChatCornerMessage(playerName, userId, text)
         end
         addUnread()
     end)
